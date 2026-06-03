@@ -55,7 +55,7 @@ install_hysteria() {
     return
   fi
 
-  echo "正在安装 Hysteria2 国内兼容版..."
+  echo "正在安装 Hysteria2..."
 
   HY2_VERSION="v2.9.2"
   HY2_FILE="hysteria-linux-amd64"
@@ -98,9 +98,6 @@ install_hysteria() {
 
   if [ "$SUCCESS" != "1" ]; then
     echo "Hysteria2 下载失败"
-    echo "请手动执行："
-    echo "curl -L https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/v2.9.2/hysteria-linux-amd64 -o /usr/local/bin/hysteria"
-    echo "chmod +x /usr/local/bin/hysteria"
     exit 1
   fi
 
@@ -552,6 +549,70 @@ log_node() {
   pause
 }
 
+uninstall_manager() {
+  clear
+  echo "此操作只删除 hy2 管理面板，不删除已创建的 HY2 节点。"
+  read -p "确定删除管理面板吗？输入 y 确认: " confirm
+
+  if [ "$confirm" != "y" ]; then
+    menu
+  fi
+
+  rm -f /usr/local/bin/hy2
+
+  echo "HY2 管理面板已删除。"
+  echo "已创建的节点不会受影响。"
+  exit 0
+}
+
+uninstall_all() {
+  clear
+  echo "危险操作：这会删除所有 HY2 节点、配置、证书和管理面板。"
+  read -p "确定全部删除吗？输入 y 确认: " confirm
+
+  if [ "$confirm" != "y" ]; then
+    menu
+  fi
+
+  systemctl stop hysteria.service 2>/dev/null || true
+  systemctl disable hysteria.service 2>/dev/null || true
+
+  systemctl stop hysteria-*.service 2>/dev/null || true
+  systemctl disable hysteria-*.service 2>/dev/null || true
+
+  systemctl stop hy2-expire-check.timer 2>/dev/null || true
+  systemctl disable hy2-expire-check.timer 2>/dev/null || true
+
+  rm -f /etc/systemd/system/hysteria.service
+  rm -f /etc/systemd/system/hysteria-*.service
+  rm -f /etc/systemd/system/hy2-expire-check.service
+  rm -f /etc/systemd/system/hy2-expire-check.timer
+  rm -f /usr/local/bin/hy2-expire-check
+  rm -f /usr/local/bin/hy2
+  rm -rf /etc/hysteria
+
+  systemctl daemon-reload
+  systemctl reset-failed
+
+  echo "HY2 已全部删除。"
+  exit 0
+}
+
+update_panel() {
+  clear
+  echo "正在更新管理面板..."
+
+  curl -fsSL \
+  https://raw.githubusercontent.com/Ale8045/hy2-manager/main/hy2.sh \
+  -o /usr/local/bin/hy2
+
+  sed -i 's/\r$//' /usr/local/bin/hy2
+  chmod +x /usr/local/bin/hy2
+
+  echo "更新完成，请重新执行：hy2"
+  exit 0
+}
+
 menu() {
 clear
 echo "==============================="
@@ -569,6 +630,9 @@ echo "9. 查看所有链接"
 echo "10. 重启指定节点"
 echo "11. 查看指定节点状态"
 echo "12. 查看指定节点日志"
+echo "13. 删除管理面板（保留节点）"
+echo "14. 删除所有节点并卸载HY2"
+echo "15. 更新管理面板"
 echo "0. 退出"
 echo "==============================="
 read -p "请输入选项: " choice
@@ -586,6 +650,9 @@ case "$choice" in
   10) restart_node ;;
   11) status_node ;;
   12) log_node ;;
+  13) uninstall_manager ;;
+  14) uninstall_all ;;
+  15) update_panel ;;
   0) exit 0 ;;
   *) echo "输入错误"; sleep 1; menu ;;
 esac
