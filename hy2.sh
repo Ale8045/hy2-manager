@@ -1,11 +1,11 @@
-
-cat > /usr/local/bin/hy2 <<'EOF'
 #!/bin/bash
 
 BASE_DIR="/etc/hysteria"
 NODE_DIR="/etc/hysteria/nodes"
 CERT_DIR="/etc/hysteria"
 SERVER_IP_FILE="/etc/hysteria/server.ip"
+HY2_VERSION="v2.9.2"
+HY2_FILE="hysteria-linux-amd64"
 
 mkdir -p "$BASE_DIR" "$NODE_DIR"
 
@@ -50,17 +50,62 @@ pause() {
   menu
 }
 
+install_hysteria() {
+  if command -v hysteria >/dev/null 2>&1; then
+    echo "检测到 Hysteria2 已安装，跳过下载"
+    hysteria version || true
+    return
+  fi
+
+  echo "正在安装 Hysteria2..."
+  echo "如果是国内 VPS，会自动尝试 GitHub 镜像下载。"
+
+  URLS=(
+    "https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+  )
+
+  SUCCESS=0
+
+  for url in "${URLS[@]}"; do
+    echo "尝试下载: $url"
+    rm -f /tmp/hysteria-download
+
+    if curl -L --connect-timeout 15 --retry 2 "$url" -o /tmp/hysteria-download; then
+      chmod +x /tmp/hysteria-download
+
+      if /tmp/hysteria-download version >/dev/null 2>&1; then
+        mv /tmp/hysteria-download /usr/local/bin/hysteria
+        chmod +x /usr/local/bin/hysteria
+        SUCCESS=1
+        break
+      fi
+    fi
+  done
+
+  if [ "$SUCCESS" != "1" ]; then
+    echo "Hysteria2 下载失败。"
+    echo "请手动下载 hysteria-linux-amd64 到 /usr/local/bin/hysteria 后再运行 hy2。"
+    exit 1
+  fi
+
+  echo "Hysteria2 安装成功"
+  /usr/local/bin/hysteria version || true
+}
+
 install_base() {
   apt update -y
   apt install -y curl wget openssl ca-certificates iptables coreutils qrencode iproute2
 
-  if [ ! -f /usr/local/bin/hysteria ]; then
-    bash <(curl -fsSL https://get.hy2.sh/)
-  fi
+  install_hysteria
 
   mkdir -p "$CERT_DIR" "$NODE_DIR"
 
   if [ ! -f "$CERT_DIR/server.key" ] || [ ! -f "$CERT_DIR/server.crt" ]; then
+    echo "正在生成自签证书..."
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
       -keyout "$CERT_DIR/server.key" \
       -out "$CERT_DIR/server.crt" \
@@ -536,7 +581,3 @@ esac
 }
 
 menu
-EOF
-
-chmod +x /usr/local/bin/hy2
-hy2
