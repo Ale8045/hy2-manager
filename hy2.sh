@@ -4,8 +4,6 @@ BASE_DIR="/etc/hysteria"
 NODE_DIR="/etc/hysteria/nodes"
 CERT_DIR="/etc/hysteria"
 SERVER_IP_FILE="/etc/hysteria/server.ip"
-HY2_VERSION="v2.9.2"
-HY2_FILE="hysteria-linux-amd64"
 
 mkdir -p "$BASE_DIR" "$NODE_DIR"
 
@@ -57,15 +55,17 @@ install_hysteria() {
     return
   fi
 
-  echo "正在安装 Hysteria2..."
-  echo "如果是国内 VPS，会自动尝试 GitHub 镜像下载。"
+  echo "正在安装 Hysteria2 国内兼容版..."
+
+  HY2_VERSION="v2.9.2"
+  HY2_FILE="hysteria-linux-amd64"
 
   URLS=(
-    "https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
     "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
     "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
     "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-    "https://mirror.ghproxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
   )
 
   SUCCESS=0
@@ -74,7 +74,15 @@ install_hysteria() {
     echo "尝试下载: $url"
     rm -f /tmp/hysteria-download
 
-    if curl -L --connect-timeout 15 --retry 2 "$url" -o /tmp/hysteria-download; then
+    timeout 35 curl -L \
+      --connect-timeout 8 \
+      --retry 1 \
+      --speed-time 10 \
+      --speed-limit 10240 \
+      "$url" \
+      -o /tmp/hysteria-download
+
+    if [ -s /tmp/hysteria-download ]; then
       chmod +x /tmp/hysteria-download
 
       if /tmp/hysteria-download version >/dev/null 2>&1; then
@@ -84,16 +92,20 @@ install_hysteria() {
         break
       fi
     fi
+
+    echo "当前地址失败，尝试下一个..."
   done
 
   if [ "$SUCCESS" != "1" ]; then
-    echo "Hysteria2 下载失败。"
-    echo "请手动下载 hysteria-linux-amd64 到 /usr/local/bin/hysteria 后再运行 hy2。"
+    echo "Hysteria2 下载失败"
+    echo "请手动执行："
+    echo "curl -L https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/v2.9.2/hysteria-linux-amd64 -o /usr/local/bin/hysteria"
+    echo "chmod +x /usr/local/bin/hysteria"
     exit 1
   fi
 
   echo "Hysteria2 安装成功"
-  /usr/local/bin/hysteria version || true
+  /usr/local/bin/hysteria version
 }
 
 install_base() {
@@ -105,7 +117,6 @@ install_base() {
   mkdir -p "$CERT_DIR" "$NODE_DIR"
 
   if [ ! -f "$CERT_DIR/server.key" ] || [ ! -f "$CERT_DIR/server.crt" ]; then
-    echo "正在生成自签证书..."
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
       -keyout "$CERT_DIR/server.key" \
       -out "$CERT_DIR/server.crt" \
