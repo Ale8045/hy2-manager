@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="1.3.0"
+VERSION="1.3.1"
 PROJECT_NAME="HK HY2 Manager"
 
 BASE_DIR="/etc/hysteria"
@@ -124,9 +124,17 @@ choose_port() {
 }
 
 get_ssl_domain() {
+  local DOMAIN=""
+
   if [ -f "$SSL_INFO" ]; then
-    grep "^DOMAIN=" "$SSL_INFO" | cut -d= -f2-
+    DOMAIN=$(grep "^DOMAIN=" "$SSL_INFO" | cut -d= -f2- | head -1)
   fi
+
+  if [ -z "$DOMAIN" ] && [ -f "$SSL_CERT" ]; then
+    DOMAIN=$(openssl x509 -in "$SSL_CERT" -noout -subject 2>/dev/null | sed -n 's/.*CN *= *//p' | sed 's/,.*//' | head -1)
+  fi
+
+  echo "$DOMAIN"
 }
 
 has_ssl_cert() {
@@ -372,9 +380,16 @@ KEY=$SSL_KEY
 CREATED_AT=$(date "+%Y-%m-%d %H:%M:%S")
 EOL
 
-  echo "SSL证书申请成功：$DOMAIN"
+  echo "==============================="
+  echo "SSL证书申请成功"
+  echo "==============================="
+  echo "域名：$DOMAIN"
   echo "证书：$SSL_CERT"
   echo "私钥：$SSL_KEY"
+  END_RAW=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
+  END_TIME=$(date -d "$END_RAW" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "$END_RAW")
+  echo "到期时间：$END_TIME"
+  echo "==============================="
 }
 
 select_node_mode() {
@@ -883,6 +898,8 @@ ssl_menu() {
   echo "2. 查看证书状态"
   echo "3. 强制续期证书"
   echo "4. 删除证书"
+  echo "5. 导出证书路径"
+  echo "6. 检测证书健康"
   echo "0. 返回主菜单"
   echo "==============================="
   read -p "请输入选项: " c
@@ -892,6 +909,8 @@ ssl_menu() {
     2) show_ssl_status ;;
     3) renew_ssl_cert ;;
     4) delete_ssl_cert ;;
+    5) export_ssl_path ;;
+    6) check_ssl_health ;;
     0) menu ;;
     *) echo "输入错误"; sleep 1; ssl_menu ;;
   esac
@@ -904,47 +923,147 @@ show_ssl_status() {
   echo "==============================="
 
   if ! has_ssl_cert; then
-    echo "状态: 未安装"
-    echo "证书路径: $SSL_CERT"
-    echo "私钥路径: $SSL_KEY"
-    echo "说明: 未找到有效证书文件"
+    echo "状态：未安装"
+    echo "证书路径：$SSL_CERT"
+    echo "私钥路径：$SSL_KEY"
+    echo "证书目录：$SSL_DIR"
     echo "==============================="
     pause
   fi
 
   DOMAIN=$(get_ssl_domain)
-  [ -z "$DOMAIN" ] && DOMAIN="未记录"
+  [ -z "$DOMAIN" ] && DOMAIN="未识别"
 
-  END_DATE=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
-  START_DATE=$(openssl x509 -in "$SSL_CERT" -noout -startdate 2>/dev/null | cut -d= -f2-)
   SUBJECT=$(openssl x509 -in "$SSL_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')
   ISSUER=$(openssl x509 -in "$SSL_CERT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+  START_RAW=$(openssl x509 -in "$SSL_CERT" -noout -startdate 2>/dev/null | cut -d= -f2-)
+  END_RAW=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
 
-  if [ -n "$END_DATE" ]; then
-    END_TS=$(date -d "$END_DATE" +%s 2>/dev/null)
-    NOW_TS=$(date +%s)
-    if [ -n "$END_TS" ]; then
-      LEFT_DAYS=$(( (END_TS - NOW_TS) / 86400 ))
-    else
-      LEFT_DAYS="未知"
-    fi
+  START_TIME=$(date -d "$START_RAW" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "$START_RAW")
+  END_TIME=$(date -d "$END_RAW" "+%Y-%m-%d %H:%M:%S" 2>/dev/null || echo "$END_RAW")
+
+  END_TS=$(date -d "$END_RAW" +%s 2>/dev/null || echo 0)
+  NOW_TS=$(date +%s)
+  if [ "$END_TS" -gt 0 ]; then
+    LEFT_DAYS=$(( (END_TS - NOW_TS) / 86400 ))
   else
     LEFT_DAYS="未知"
   fi
 
-  echo "状态: 已安装"
-  echo "绑定域名: $DOMAIN"
-  echo "证书路径: $SSL_CERT"
-  echo "私钥路径: $SSL_KEY"
-  echo "证书目录: $SSL_DIR"
-  echo "签发对象: ${SUBJECT:-未知}"
-  echo "签发机构: ${ISSUER:-未知}"
-  echo "生效时间: ${START_DATE:-未知}"
-  echo "到期时间: ${END_DATE:-未知}"
-  echo "剩余天数: ${LEFT_DAYS} 天"
+  echo "状态：已安装"
+  echo "绑定域名：$DOMAIN"
+  echo "证书路径：$SSL_CERT"
+  echo "私钥路径：$SSL_KEY"
+  echo "证书目录：$SSL_DIR"
+  echo "签发对象：$SUBJECT"
+  echo "签发机构：$ISSUER"
+  echo "生效时间：$START_TIME"
+  echo "到期时间：$END_TIME"
+  echo "剩余天数：$LEFT_DAYS 天"
 
-  if [ -f "$SSL_INFO" ]; then
-    echo "信息文件: $SSL_INFO"
+  if systemctl list-timers 2>/dev/null | grep -q acme; then
+    echo "自动续期：已开启"
+  elif crontab -l 2>/dev/null | grep -q acme.sh; then
+    echo "自动续期：已开启"
+  else
+    echo "自动续期：未检测到"
+  fi
+
+  echo "==============================="
+  pause
+}
+
+export_ssl_path() {
+  clear
+  echo "==============================="
+  echo "SSL 证书路径"
+  echo "==============================="
+
+  if ! has_ssl_cert; then
+    echo "SSL证书未安装"
+    echo "==============================="
+    pause
+  fi
+
+  echo "证书路径：$SSL_CERT"
+  echo "私钥路径：$SSL_KEY"
+  echo "证书目录：$SSL_DIR"
+  echo "绑定域名：$(get_ssl_domain)"
+  echo "==============================="
+  echo "可复制路径："
+  echo "$SSL_CERT"
+  echo "$SSL_KEY"
+  echo "==============================="
+  pause
+}
+
+check_ssl_health() {
+  clear
+  echo "==============================="
+  echo "SSL 证书健康检测"
+  echo "==============================="
+
+  if ! has_ssl_cert; then
+    echo "证书状态：异常，未安装"
+    echo "建议：先申请证书"
+    echo "==============================="
+    pause
+  fi
+
+  DOMAIN=$(get_ssl_domain)
+  [ -z "$DOMAIN" ] && DOMAIN="未识别"
+  echo "绑定域名：$DOMAIN"
+
+  if openssl x509 -in "$SSL_CERT" -noout >/dev/null 2>&1; then
+    echo "证书文件：正常"
+  else
+    echo "证书文件：异常"
+  fi
+
+  if [ -f "$SSL_KEY" ] && [ -s "$SSL_KEY" ]; then
+    echo "私钥文件：正常"
+  else
+    echo "私钥文件：异常"
+  fi
+
+  END_RAW=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
+  END_TS=$(date -d "$END_RAW" +%s 2>/dev/null || echo 0)
+  NOW_TS=$(date +%s)
+  if [ "$END_TS" -gt 0 ]; then
+    LEFT_DAYS=$(( (END_TS - NOW_TS) / 86400 ))
+    echo "剩余天数：$LEFT_DAYS 天"
+    if [ "$LEFT_DAYS" -le 0 ]; then
+      echo "到期状态：已过期"
+      echo "建议：立即强制续期"
+    elif [ "$LEFT_DAYS" -le 15 ]; then
+      echo "到期状态：即将过期"
+      echo "建议：尽快续期"
+    elif [ "$LEFT_DAYS" -le 30 ]; then
+      echo "到期状态：需要关注"
+      echo "建议：可以提前续期"
+    else
+      echo "到期状态：正常"
+    fi
+  else
+    echo "剩余天数：未知"
+  fi
+
+  if [ "$DOMAIN" != "未识别" ]; then
+    RESOLVE_IP=$(getent hosts "$DOMAIN" 2>/dev/null | awk '{print $1}' | head -1)
+    SERVER_IP=$(get_ip)
+    if [ -n "$RESOLVE_IP" ]; then
+      echo "域名解析：$RESOLVE_IP"
+      echo "当前服务器IP：$SERVER_IP"
+      if [ "$RESOLVE_IP" = "$SERVER_IP" ]; then
+        echo "解析状态：正常"
+      else
+        echo "解析状态：可能不一致"
+        echo "建议：检查DNS解析是否指向当前服务器"
+      fi
+    else
+      echo "域名解析：未检测到"
+      echo "建议：检查DNS解析"
+    fi
   fi
 
   echo "==============================="
