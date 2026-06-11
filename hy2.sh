@@ -903,15 +903,48 @@ show_ssl_status() {
   echo "SSL 证书状态"
   echo "==============================="
 
-  if has_ssl_cert; then
-    echo "状态: 已安装"
-    if [ -f "$SSL_INFO" ]; then
-      cat "$SSL_INFO"
-    fi
-    echo ""
-    openssl x509 -in "$SSL_CERT" -noout -subject -issuer -dates 2>/dev/null || true
-  else
+  if ! has_ssl_cert; then
     echo "状态: 未安装"
+    echo "证书路径: $SSL_CERT"
+    echo "私钥路径: $SSL_KEY"
+    echo "说明: 未找到有效证书文件"
+    echo "==============================="
+    pause
+  fi
+
+  DOMAIN=$(get_ssl_domain)
+  [ -z "$DOMAIN" ] && DOMAIN="未记录"
+
+  END_DATE=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
+  START_DATE=$(openssl x509 -in "$SSL_CERT" -noout -startdate 2>/dev/null | cut -d= -f2-)
+  SUBJECT=$(openssl x509 -in "$SSL_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')
+  ISSUER=$(openssl x509 -in "$SSL_CERT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')
+
+  if [ -n "$END_DATE" ]; then
+    END_TS=$(date -d "$END_DATE" +%s 2>/dev/null)
+    NOW_TS=$(date +%s)
+    if [ -n "$END_TS" ]; then
+      LEFT_DAYS=$(( (END_TS - NOW_TS) / 86400 ))
+    else
+      LEFT_DAYS="未知"
+    fi
+  else
+    LEFT_DAYS="未知"
+  fi
+
+  echo "状态: 已安装"
+  echo "绑定域名: $DOMAIN"
+  echo "证书路径: $SSL_CERT"
+  echo "私钥路径: $SSL_KEY"
+  echo "证书目录: $SSL_DIR"
+  echo "签发对象: ${SUBJECT:-未知}"
+  echo "签发机构: ${ISSUER:-未知}"
+  echo "生效时间: ${START_DATE:-未知}"
+  echo "到期时间: ${END_DATE:-未知}"
+  echo "剩余天数: ${LEFT_DAYS} 天"
+
+  if [ -f "$SSL_INFO" ]; then
+    echo "信息文件: $SSL_INFO"
   fi
 
   echo "==============================="
