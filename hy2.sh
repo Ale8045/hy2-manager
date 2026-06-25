@@ -1,6 +1,6 @@
 #!/bin/bash
 
-VERSION="2.0.0-STABLE"
+VERSION="1.3.1"
 PROJECT_NAME="HK HY2 Manager"
 
 BASE_DIR="/etc/hysteria"
@@ -15,10 +15,7 @@ SSL_INFO="$SSL_DIR/ssl.info"
 SERVER_IP_FILE="/etc/hysteria/server.ip"
 
 HY2_VERSION="v2.9.2"
-# 如果你把 hysteria 二进制也上传到自己的 GitHub Release，可以改这里：
-# 例：CUSTOM_BINARY_BASE="https://github.com/Ale8045/hy2-manager/releases/download/bin"
-# 需要放置的文件名：hysteria-linux-amd64 / hysteria-linux-arm64 / hysteria-linux-armv7
-CUSTOM_BINARY_BASE=""
+HY2_FILE="hysteria-linux-amd64"
 
 mkdir -p "$BASE_DIR" "$NODE_DIR" "$SSL_DIR"
 
@@ -155,25 +152,20 @@ node_server() {
 }
 
 install_hysteria() {
-  echo "正在检测 Hysteria2..."
-
-  # 如果已安装，必须确认它真的是可执行 ELF，避免 ASCII/HTML 假文件
   if command -v hysteria >/dev/null 2>&1; then
-    BIN_PATH="$(command -v hysteria)"
-    if file "$BIN_PATH" 2>/dev/null | grep -q "ELF" && "$BIN_PATH" version >/dev/null 2>&1; then
+    if file "$(command -v hysteria)" 2>/dev/null | grep -q "ELF"; then
       echo "检测到 Hysteria2 已安装，跳过下载"
-      "$BIN_PATH" version || true
+      hysteria version || true
       return
     else
-      echo "检测到已有 hysteria，但文件无效，删除后重新安装"
-      rm -f "$BIN_PATH"
+      echo "检测到旧 hysteria 文件无效，删除后重新安装"
+      rm -f "$(command -v hysteria)"
     fi
   fi
 
   echo "正在安装 Hysteria2..."
 
-  # 自动识别 CPU 架构
-  ARCH="$(uname -m)"
+  ARCH=$(uname -m)
   case "$ARCH" in
     x86_64|amd64)
       HY2_FILE="hysteria-linux-amd64"
@@ -185,36 +177,27 @@ install_hysteria() {
       HY2_FILE="hysteria-linux-armv7"
       ;;
     *)
-      echo "不支持的 CPU 架构: $ARCH"
+      echo "不支持的架构: $ARCH"
       exit 1
       ;;
   esac
 
-  echo "当前架构: $ARCH"
-  echo "下载文件: $HY2_FILE"
-  echo "版本: $HY2_VERSION"
+  # Hysteria 官方 tag 是 app/v2.x.x
+  # GitHub 下载链接里这个斜杠必须写成 app%2Fv2.x.x
+  HY2_TAG="app%2F${HY2_VERSION}"
 
-  URLS=()
-
-  # 优先使用你自己的 GitHub Release 下载源，最稳定
-  if [ -n "$CUSTOM_BINARY_BASE" ]; then
-    URLS+=("${CUSTOM_BINARY_BASE}/${HY2_FILE}")
-  fi
-
-  # 官方和常见备用源
-  URLS+=(
-    "https://github.com/apernet/hysteria/releases/download/${HY2_VERSION}/${HY2_FILE}"
-    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/${HY2_VERSION}/${HY2_FILE}"
-    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/${HY2_VERSION}/${HY2_FILE}"
-    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/${HY2_VERSION}/${HY2_FILE}"
-    "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/${HY2_VERSION}/${HY2_FILE}"
+  URLS=(
+    "https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
+    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
+    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
+    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
   )
 
   SUCCESS=0
 
   for url in "${URLS[@]}"; do
     echo "尝试下载: $url"
-    rm -f /tmp/hysteria-download /tmp/hysteria-curl-error.log
+    rm -f /tmp/hysteria-download
 
     curl -4 -L --fail \
       --connect-timeout 10 \
@@ -223,48 +206,27 @@ install_hysteria() {
       --max-time 90 \
       -A "Mozilla/5.0" \
       "$url" \
-      -o /tmp/hysteria-download 2>/tmp/hysteria-curl-error.log
+      -o /tmp/hysteria-download
 
-    echo "下载结果:"
-    ls -lh /tmp/hysteria-download 2>/dev/null || true
-    file /tmp/hysteria-download 2>/dev/null || true
-
-    if [ -s /tmp/hysteria-download ] && file /tmp/hysteria-download 2>/dev/null | grep -q "ELF"; then
+    if [ -s /tmp/hysteria-download ] && file /tmp/hysteria-download | grep -q "ELF"; then
       chmod +x /tmp/hysteria-download
 
-      if /tmp/hysteria-download version >/dev/null 2>&1; then
+      if /tmp/hysteria-download version >/dev/null 2>&1 || /tmp/hysteria-download --version >/dev/null 2>&1; then
         mv /tmp/hysteria-download /usr/local/bin/hysteria
         chmod +x /usr/local/bin/hysteria
         SUCCESS=1
         break
-      else
-        echo "文件是 ELF，但不能正常执行，可能架构不匹配"
       fi
     fi
 
     echo "文件无效，切换源..."
-    echo "curl错误信息:"
-    cat /tmp/hysteria-curl-error.log 2>/dev/null | tail -3 || true
-    rm -f /tmp/hysteria-download
+    echo "文件类型: $(file /tmp/hysteria-download 2>/dev/null || echo 无文件)"
+    echo "文件大小: $(ls -lh /tmp/hysteria-download 2>/dev/null | awk '{print $5}' || echo 0)"
   done
 
   if [ "$SUCCESS" != "1" ]; then
-    echo "================================="
     echo "Hysteria2 下载失败"
-    echo "================================="
-    echo "这不是配置问题，是当前服务器下载不到真正的二进制文件。"
-    echo ""
-    echo "最稳解决方法："
-    echo "1. 把 ${HY2_FILE} 上传到你自己的 GitHub Release"
-    echo "2. 修改脚本顶部 CUSTOM_BINARY_BASE 为你的 Release 地址"
-    echo ""
-    echo "例如:"
-    echo 'CUSTOM_BINARY_BASE="https://github.com/你的用户名/hy2-manager/releases/download/bin"'
-    echo ""
-    echo "或者手动上传:"
-    echo "scp ${HY2_FILE} root@服务器IP:/usr/local/bin/hysteria"
-    echo "chmod +x /usr/local/bin/hysteria"
-    echo "================================="
+    echo "请检查服务器是否能访问 GitHub Release，或手动上传 hysteria 到 /usr/local/bin/hysteria"
     exit 1
   fi
 
@@ -274,7 +236,7 @@ install_hysteria() {
 
 install_base() {
   apt update -y
-  apt install -y curl wget openssl ca-certificates iptables coreutils qrencode iproute2 file dnsutils
+  apt install -y curl wget openssl ca-certificates iptables coreutils qrencode iproute2
 
   install_hysteria
 
