@@ -160,46 +160,55 @@ install_hysteria() {
 
   echo "正在安装 Hysteria2..."
 
-  URLS=(
-    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-    "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-    "https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
-  )
+  ARCH=$(uname -m)
+  case "$ARCH" in
+    x86_64|amd64)
+      FILE="hysteria-linux-amd64"
+      ;;
+    aarch64|arm64)
+      FILE="hysteria-linux-arm64"
+      ;;
+    armv7l)
+      FILE="hysteria-linux-armv7"
+      ;;
+    *)
+      echo "不支持的架构: $ARCH"
+      exit 1
+      ;;
+  esac
 
-  SUCCESS=0
+  VERSION="v2.9.2"
+
+  URLS=(
+    "https://github.com/apernet/hysteria/releases/download/${VERSION}/${FILE}"
+    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/${VERSION}/${FILE}"
+    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/${VERSION}/${FILE}"
+    "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/${VERSION}/${FILE}"
+  )
 
   for url in "${URLS[@]}"; do
     echo "尝试下载: $url"
-    rm -f /tmp/hysteria-download
+    rm -f /tmp/hysteria
 
-    timeout 35 curl -L \
-      --connect-timeout 8 \
-      --retry 1 \
-      --speed-time 10 \
-      --speed-limit 10240 \
-      "$url" \
-      -o /tmp/hysteria-download
+    curl -L --connect-timeout 8 --retry 2 --max-time 60 \
+      "$url" -o /tmp/hysteria
 
-    if [ -s /tmp/hysteria-download ]; then
-      chmod +x /tmp/hysteria-download
-      mv /tmp/hysteria-download /usr/local/bin/hysteria
+    if [ -s /tmp/hysteria ] && file /tmp/hysteria | grep -q "ELF"; then
+      chmod +x /tmp/hysteria
+      mv /tmp/hysteria /usr/local/bin/hysteria
       chmod +x /usr/local/bin/hysteria
-      SUCCESS=1
-      break
-    fi
 
-    echo "当前地址失败，尝试下一个..."
+      echo "Hysteria2 安装成功"
+      hysteria version || true
+      return
+    else
+      echo "文件无效，切换源..."
+      rm -f /tmp/hysteria
+    fi
   done
 
-  if [ "$SUCCESS" != "1" ]; then
-    echo "Hysteria2 下载失败"
-    exit 1
-  fi
-
-  echo "Hysteria2 安装成功"
-  /usr/local/bin/hysteria version || true
+  echo "所有下载源失败"
+  exit 1
 }
 
 install_base() {
