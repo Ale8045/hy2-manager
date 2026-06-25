@@ -1,23 +1,15 @@
 #!/bin/bash
 
-VERSION="1.3.0"
-PROJECT_NAME="HK HY2 Manager"
-
 BASE_DIR="/etc/hysteria"
 NODE_DIR="/etc/hysteria/nodes"
 CERT_DIR="/etc/hysteria"
-SELF_CERT="$CERT_DIR/server.crt"
-SELF_KEY="$CERT_DIR/server.key"
-SSL_DIR="/etc/hysteria/ssl"
-SSL_CERT="$SSL_DIR/server.crt"
-SSL_KEY="$SSL_DIR/server.key"
-SSL_INFO="$SSL_DIR/ssl.info"
 SERVER_IP_FILE="/etc/hysteria/server.ip"
 
-HY2_VERSION="v2.9.2"
-HY2_FILE="hysteria-linux-amd64"
+mkdir -p "$BASE_DIR" "$NODE_DIR"
 
-mkdir -p "$BASE_DIR" "$NODE_DIR" "$SSL_DIR"
+random_port() {
+  shuf -i 10000-60000 -n 1
+}
 
 random_pass() {
   openssl rand -base64 16 | tr -dc 'A-Za-z0-9' | head -c 16
@@ -56,93 +48,6 @@ pause() {
   menu
 }
 
-check_port_used() {
-  local PORT="$1"
-  local EXCLUDE_ID="$2"
-
-  if ss -lntu 2>/dev/null | awk '{print $5}' | grep -Eq "(:|\.)${PORT}$"; then
-    return 0
-  fi
-
-  if ls "$NODE_DIR"/node-*.yaml >/dev/null 2>&1; then
-    for f in "$NODE_DIR"/node-*.yaml; do
-      if [ -n "$EXCLUDE_ID" ] && [ "$f" = "$(config_file "$EXCLUDE_ID")" ]; then
-        continue
-      fi
-      if grep -q "^listen: :$PORT$" "$f" 2>/dev/null; then
-        return 0
-      fi
-    done
-  fi
-
-  return 1
-}
-
-random_port() {
-  local PORT
-  while true; do
-    PORT=$(shuf -i 10000-60000 -n 1)
-    if ! check_port_used "$PORT"; then
-      echo "$PORT"
-      return
-    fi
-  done
-}
-
-choose_port() {
-  local INPUT_PORT="$1"
-  local EXCLUDE_ID="$2"
-  local FINAL_PORT
-
-  if [ -z "$INPUT_PORT" ]; then
-    FINAL_PORT=$(random_port)
-    echo "$FINAL_PORT"
-    return
-  fi
-
-  if ! echo "$INPUT_PORT" | grep -Eq '^[0-9]+$'; then
-    echo "端口格式错误，自动生成随机端口" >&2
-    FINAL_PORT=$(random_port)
-    echo "$FINAL_PORT"
-    return
-  fi
-
-  if [ "$INPUT_PORT" -lt 1 ] || [ "$INPUT_PORT" -gt 65535 ]; then
-    echo "端口范围错误，自动生成随机端口" >&2
-    FINAL_PORT=$(random_port)
-    echo "$FINAL_PORT"
-    return
-  fi
-
-  if check_port_used "$INPUT_PORT" "$EXCLUDE_ID"; then
-    echo "端口 $INPUT_PORT 已被占用，自动生成随机端口" >&2
-    FINAL_PORT=$(random_port)
-    echo "$FINAL_PORT"
-  else
-    echo "$INPUT_PORT"
-  fi
-}
-
-get_ssl_domain() {
-  if [ -f "$SSL_INFO" ]; then
-    grep "^DOMAIN=" "$SSL_INFO" | cut -d= -f2-
-  fi
-}
-
-has_ssl_cert() {
-  [ -f "$SSL_CERT" ] && [ -f "$SSL_KEY" ] && [ -s "$SSL_CERT" ] && [ -s "$SSL_KEY" ]
-}
-
-node_mode() {
-  local ID="$1"
-  grep "^模式:" "$(info_file "$ID")" 2>/dev/null | sed 's/^模式: //'
-}
-
-node_server() {
-  local ID="$1"
-  grep "^服务器:" "$(info_file "$ID")" 2>/dev/null | awk '{print $2}'
-}
-
 install_hysteria() {
   if command -v hysteria >/dev/null 2>&1; then
     echo "检测到 Hysteria2 已安装，跳过下载"
@@ -151,6 +56,9 @@ install_hysteria() {
   fi
 
   echo "正在安装 Hysteria2..."
+
+  HY2_VERSION="v2.9.2"
+  HY2_FILE="hysteria-linux-amd64"
 
   URLS=(
     "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
@@ -176,10 +84,13 @@ install_hysteria() {
 
     if [ -s /tmp/hysteria-download ]; then
       chmod +x /tmp/hysteria-download
-      mv /tmp/hysteria-download /usr/local/bin/hysteria
-      chmod +x /usr/local/bin/hysteria
-      SUCCESS=1
-      break
+
+      if /tmp/hysteria-download version >/dev/null 2>&1; then
+        mv /tmp/hysteria-download /usr/local/bin/hysteria
+        chmod +x /usr/local/bin/hysteria
+        SUCCESS=1
+        break
+      fi
     fi
 
     echo "当前地址失败，尝试下一个..."
@@ -191,7 +102,7 @@ install_hysteria() {
   fi
 
   echo "Hysteria2 安装成功"
-  /usr/local/bin/hysteria version || true
+  /usr/local/bin/hysteria version
 }
 
 install_base() {
@@ -200,23 +111,22 @@ install_base() {
 
   install_hysteria
 
-  mkdir -p "$CERT_DIR" "$NODE_DIR" "$SSL_DIR"
+  mkdir -p "$CERT_DIR" "$NODE_DIR"
 
-  if [ ! -f "$SELF_KEY" ] || [ ! -f "$SELF_CERT" ]; then
-    echo "正在生成自签证书..."
+  if [ ! -f "$CERT_DIR/server.key" ] || [ ! -f "$CERT_DIR/server.crt" ]; then
     openssl req -x509 -nodes -newkey ec:<(openssl ecparam -name prime256v1) \
-      -keyout "$SELF_KEY" \
-      -out "$SELF_CERT" \
+      -keyout "$CERT_DIR/server.key" \
+      -out "$CERT_DIR/server.crt" \
       -subj "/CN=bing.com" \
       -days 36500
   fi
 
-  chmod 755 "$CERT_DIR" "$SSL_DIR"
-  chmod 644 "$SELF_CERT" "$SELF_KEY" 2>/dev/null || true
-  chmod 644 "$SSL_CERT" "$SSL_KEY" 2>/dev/null || true
+  chmod 755 "$CERT_DIR"
+  chmod 644 "$CERT_DIR/server.crt"
+  chmod 644 "$CERT_DIR/server.key"
 
   if id hysteria >/dev/null 2>&1; then
-    chown -R hysteria:hysteria "$CERT_DIR" 2>/dev/null || true
+    chown -R hysteria:hysteria "$CERT_DIR"
   fi
 }
 
@@ -224,22 +134,13 @@ write_node_config() {
   local ID="$1"
   local PORT="$2"
   local PASSWORD="$3"
-  local MODE="$4"
-
-  local CERT_PATH="$SELF_CERT"
-  local KEY_PATH="$SELF_KEY"
-
-  if [ "$MODE" = "SSL" ]; then
-    CERT_PATH="$SSL_CERT"
-    KEY_PATH="$SSL_KEY"
-  fi
 
   cat > "$(config_file "$ID")" <<EOL
 listen: :$PORT
 
 tls:
-  cert: $CERT_PATH
-  key: $KEY_PATH
+  cert: $CERT_DIR/server.crt
+  key: $CERT_DIR/server.key
 
 auth:
   type: password
@@ -290,131 +191,12 @@ make_link() {
   local PASSWORD="$1"
   local PORT="$2"
   local ID="$3"
-  local MODE="$4"
-  local SERVER_NAME="$5"
+  local SERVER_IP
 
-  if [ "$MODE" = "SSL" ]; then
-    echo "hysteria2://${PASSWORD}@${SERVER_NAME}:${PORT}?sni=${SERVER_NAME}#HY2-${ID}-${SERVER_NAME}"
-  else
-    local SERVER_IP
-    SERVER_IP=$(get_ip)
-    echo "$SERVER_IP" > "$SERVER_IP_FILE"
-    echo "hysteria2://${PASSWORD}@${SERVER_IP}:${PORT}?sni=bing.com&insecure=1#HY2-${ID}-${SERVER_IP}"
-  fi
-}
+  SERVER_IP=$(get_ip)
+  echo "$SERVER_IP" > "$SERVER_IP_FILE"
 
-install_acme() {
-  if [ -x "$HOME/.acme.sh/acme.sh" ]; then
-    return
-  fi
-
-  echo "正在安装 acme.sh..."
-  apt update -y
-  apt install -y curl socat openssl ca-certificates cron
-
-  curl https://get.acme.sh | sh
-  "$HOME/.acme.sh/acme.sh" --set-default-ca --server letsencrypt
-}
-
-apply_ssl_cert() {
-  clear
-  read -p "请输入证书域名，例如 sx.example.com: " DOMAIN
-  if [ -z "$DOMAIN" ]; then
-    echo "域名不能为空"
-    pause
-  fi
-
-  read -p "请输入邮箱，留空使用 admin@$DOMAIN: " EMAIL
-  if [ -z "$EMAIL" ]; then
-    EMAIL="admin@$DOMAIN"
-  fi
-
-  echo ""
-  echo "申请前请确认："
-  echo "1. $DOMAIN 已经解析到当前服务器 IP"
-  echo "2. 服务器安全组已放行 TCP 80"
-  echo "3. 如果使用 Cloudflare，建议该记录使用灰云 DNS only"
-  echo ""
-
-  read -p "确认继续申请证书？输入 y: " confirm
-  if [ "$confirm" != "y" ]; then
-    pause
-  fi
-
-  install_acme
-  mkdir -p "$SSL_DIR"
-
-  systemctl stop nginx 2>/dev/null || true
-  systemctl stop apache2 2>/dev/null || true
-  systemctl stop httpd 2>/dev/null || true
-
-  "$HOME/.acme.sh/acme.sh" --register-account -m "$EMAIL" || true
-
-  if ! "$HOME/.acme.sh/acme.sh" --issue -d "$DOMAIN" --standalone --keylength ec-256 --force; then
-    echo "证书申请失败"
-    echo "请检查域名解析、80端口、安全组、Cloudflare灰云设置"
-    pause
-  fi
-
-  "$HOME/.acme.sh/acme.sh" --install-cert -d "$DOMAIN" --ecc \
-    --fullchain-file "$SSL_CERT" \
-    --key-file "$SSL_KEY" \
-    --reloadcmd "systemctl restart 'hysteria-*.service' 2>/dev/null || true"
-
-  chmod 755 "$SSL_DIR"
-  chmod 644 "$SSL_CERT" "$SSL_KEY"
-
-  cat > "$SSL_INFO" <<EOL
-DOMAIN=$DOMAIN
-EMAIL=$EMAIL
-CERT=$SSL_CERT
-KEY=$SSL_KEY
-CREATED_AT=$(date "+%Y-%m-%d %H:%M:%S")
-EOL
-
-  echo "SSL证书申请成功：$DOMAIN"
-  echo "证书：$SSL_CERT"
-  echo "私钥：$SSL_KEY"
-}
-
-select_node_mode() {
-  echo "==============================="
-  echo "是否使用 SSL 证书？"
-  echo "1. 使用 SSL"
-  echo "2. 不使用 SSL"
-  echo "==============================="
-  read -p "请选择 [1/2]: " SSL_CHOICE
-
-  if [ "$SSL_CHOICE" = "1" ]; then
-    if ! has_ssl_cert; then
-      echo "未检测到 SSL 证书，需要先申请。"
-      apply_ssl_cert
-    fi
-
-    if has_ssl_cert; then
-      MODE="SSL"
-      SERVER_NAME=$(get_ssl_domain)
-      if [ -z "$SERVER_NAME" ]; then
-        read -p "未找到域名记录，请输入当前证书域名: " SERVER_NAME
-      fi
-      SNI="$SERVER_NAME"
-      TLS_MODE="正式证书"
-      INSECURE="false"
-    else
-      echo "SSL证书不可用，自动回退到 IP 模式"
-      MODE="IP"
-      SERVER_NAME=$(get_ip)
-      SNI="bing.com"
-      TLS_MODE="自签证书"
-      INSECURE="true"
-    fi
-  else
-    MODE="IP"
-    SERVER_NAME=$(get_ip)
-    SNI="bing.com"
-    TLS_MODE="自签证书"
-    INSECURE="true"
-  fi
+  echo "hysteria2://${PASSWORD}@${SERVER_IP}:${PORT}?sni=bing.com&insecure=1#HY2-${ID}-${SERVER_IP}"
 }
 
 add_node() {
@@ -423,30 +205,27 @@ add_node() {
 
   ID=$(next_id)
 
-  echo "==============================="
-  echo "新增 HY2 节点"
-  echo "==============================="
-  select_node_mode
-
   read -p "请输入节点端口，留空随机: " INPUT_PORT
-  PORT=$(choose_port "$INPUT_PORT")
+  if [ -z "$INPUT_PORT" ]; then
+    PORT=$(random_port)
+  else
+    PORT="$INPUT_PORT"
+  fi
 
   PASSWORD=$(random_pass)
-  LINK=$(make_link "$PASSWORD" "$PORT" "$ID" "$MODE" "$SERVER_NAME")
+  LINK=$(make_link "$PASSWORD" "$PORT" "$ID")
 
-  write_node_config "$ID" "$PORT" "$PASSWORD" "$MODE"
+  write_node_config "$ID" "$PORT" "$PASSWORD"
   write_node_service "$ID"
   open_firewall "$PORT"
 
   cat > "$(info_file "$ID")" <<EOL
 ID: $ID
-模式: $MODE
-服务器: $SERVER_NAME
+服务器: $(cat "$SERVER_IP_FILE")
 端口: $PORT
 密码: $PASSWORD
-SNI: $SNI
-TLS模式: $TLS_MODE
-跳过证书验证: $INSECURE
+SNI: bing.com
+跳过证书验证: true
 HY2链接: $LINK
 到期时间: 未设置
 创建时间: $(date "+%Y-%m-%d %H:%M:%S")
@@ -479,16 +258,14 @@ list_nodes() {
     pause
   fi
 
-  printf "%-6s %-8s %-10s %-12s %-20s\n" "ID" "模式" "端口" "状态" "到期时间"
+  printf "%-6s %-10s %-12s %-20s\n" "ID" "端口" "状态" "到期时间"
 
   for f in "$NODE_DIR"/*.info; do
     ID=$(grep "^ID:" "$f" | awk '{print $2}')
-    MODE_SHOW=$(grep "^模式:" "$f" | awk '{print $2}')
-    [ -z "$MODE_SHOW" ] && MODE_SHOW="IP"
     PORT=$(grep "^端口:" "$f" | awk '{print $2}')
     EXPIRE=$(grep "^到期时间:" "$f" | sed 's/^到期时间: //')
     STATUS=$(systemctl is-active "$(service_name "$ID")" 2>/dev/null)
-    printf "%-6s %-8s %-10s %-12s %-20s\n" "$ID" "$MODE_SHOW" "$PORT" "$STATUS" "$EXPIRE"
+    printf "%-6s %-10s %-12s %-20s\n" "$ID" "$PORT" "$STATUS" "$EXPIRE"
   done
 
   echo "==============================="
@@ -633,20 +410,19 @@ change_port() {
   fi
 
   read -p "请输入新端口，留空随机: " INPUT_PORT
-  NEW_PORT=$(choose_port "$INPUT_PORT" "$ID")
+  if [ -z "$INPUT_PORT" ]; then
+    NEW_PORT=$(random_port)
+  else
+    NEW_PORT="$INPUT_PORT"
+  fi
 
   PASSWORD=$(grep "^密码:" "$(info_file "$ID")" | awk '{print $2}')
-  MODE=$(node_mode "$ID")
-  [ -z "$MODE" ] && MODE="IP"
-  SERVER_NAME=$(node_server "$ID")
-  [ -z "$SERVER_NAME" ] && SERVER_NAME=$(get_ip)
+  LINK=$(make_link "$PASSWORD" "$NEW_PORT" "$ID")
 
-  LINK=$(make_link "$PASSWORD" "$NEW_PORT" "$ID" "$MODE" "$SERVER_NAME")
-
-  write_node_config "$ID" "$NEW_PORT" "$PASSWORD" "$MODE"
+  write_node_config "$ID" "$NEW_PORT" "$PASSWORD"
   open_firewall "$NEW_PORT"
 
-  sed -i "s/^服务器:.*/服务器: $SERVER_NAME/" "$(info_file "$ID")"
+  sed -i "s/^服务器:.*/服务器: $(cat "$SERVER_IP_FILE")/" "$(info_file "$ID")"
   sed -i "s/^端口:.*/端口: $NEW_PORT/" "$(info_file "$ID")"
   sed -i "s|^HY2链接:.*|HY2链接: $LINK|" "$(info_file "$ID")"
 
@@ -669,16 +445,11 @@ reset_password() {
 
   PORT=$(grep "^端口:" "$(info_file "$ID")" | awk '{print $2}')
   NEW_PASSWORD=$(random_pass)
-  MODE=$(node_mode "$ID")
-  [ -z "$MODE" ] && MODE="IP"
-  SERVER_NAME=$(node_server "$ID")
-  [ -z "$SERVER_NAME" ] && SERVER_NAME=$(get_ip)
+  LINK=$(make_link "$NEW_PASSWORD" "$PORT" "$ID")
 
-  LINK=$(make_link "$NEW_PASSWORD" "$PORT" "$ID" "$MODE" "$SERVER_NAME")
+  write_node_config "$ID" "$PORT" "$NEW_PASSWORD"
 
-  write_node_config "$ID" "$PORT" "$NEW_PASSWORD" "$MODE"
-
-  sed -i "s/^服务器:.*/服务器: $SERVER_NAME/" "$(info_file "$ID")"
+  sed -i "s/^服务器:.*/服务器: $(cat "$SERVER_IP_FILE")/" "$(info_file "$ID")"
   sed -i "s/^密码:.*/密码: $NEW_PASSWORD/" "$(info_file "$ID")"
   sed -i "s|^HY2链接:.*|HY2链接: $LINK|" "$(info_file "$ID")"
 
@@ -738,102 +509,6 @@ show_all_links() {
   pause
 }
 
-speed_test_node() {
-  clear
-  read -p "请输入节点ID: " ID
-
-  if [ ! -f "$(info_file "$ID")" ]; then
-    echo "节点不存在"
-    pause
-  fi
-
-  PORT=$(grep "^端口:" "$(info_file "$ID")" | awk '{print $2}')
-  SERVER_NAME=$(node_server "$ID")
-  MODE=$(node_mode "$ID")
-  [ -z "$MODE" ] && MODE="IP"
-
-  echo "==============================="
-  echo "节点 $ID 一键测速 / 检测"
-  echo "==============================="
-  echo "模式: $MODE"
-  echo "服务器: $SERVER_NAME"
-  echo "端口: $PORT"
-  echo ""
-
-  if systemctl is-active --quiet "$(service_name "$ID")"; then
-    echo "服务状态: 正常"
-  else
-    echo "服务状态: 异常"
-  fi
-
-  if ss -lunpt 2>/dev/null | grep -q ":$PORT"; then
-    echo "UDP监听: 正常"
-  else
-    echo "UDP监听: 未检测到"
-  fi
-
-  if [ "$MODE" = "SSL" ]; then
-    if has_ssl_cert; then
-      echo "SSL证书: 存在"
-      openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null || true
-    else
-      echo "SSL证书: 不存在"
-    fi
-  else
-    echo "SSL证书: IP自签模式"
-  fi
-
-  echo ""
-  echo "服务器外网延迟测试:"
-  if command -v ping >/dev/null 2>&1; then
-    ping -c 3 -W 2 1.1.1.1 2>/dev/null | tail -1 || echo "Ping测试失败"
-  else
-    echo "未安装 ping"
-  fi
-
-  echo "==============================="
-  pause
-}
-
-online_status() {
-  clear
-  echo "==============================="
-  echo "HY2 在线状态"
-  echo "==============================="
-
-  if ! ls "$NODE_DIR"/*.info >/dev/null 2>&1; then
-    echo "暂无节点"
-    pause
-  fi
-
-  printf "%-5s %-8s %-10s %-10s %-12s %-10s\n" "ID" "模式" "端口" "状态" "PID" "内存"
-
-  for f in "$NODE_DIR"/*.info; do
-    ID=$(grep "^ID:" "$f" | awk '{print $2}')
-    MODE_SHOW=$(grep "^模式:" "$f" | awk '{print $2}')
-    [ -z "$MODE_SHOW" ] && MODE_SHOW="IP"
-    PORT=$(grep "^端口:" "$f" | awk '{print $2}')
-    STATUS=$(systemctl is-active "$(service_name "$ID")" 2>/dev/null)
-    PID=$(systemctl show "$(service_name "$ID")" -p MainPID --value 2>/dev/null)
-    MEM=$(systemctl show "$(service_name "$ID")" -p MemoryCurrent --value 2>/dev/null)
-
-    if [ -z "$PID" ] || [ "$PID" = "0" ]; then
-      PID="-"
-    fi
-
-    if [ -n "$MEM" ] && echo "$MEM" | grep -Eq '^[0-9]+$' && [ "$MEM" -gt 0 ]; then
-      MEM_MB=$((MEM / 1024 / 1024))M
-    else
-      MEM_MB="-"
-    fi
-
-    printf "%-5s %-8s %-10s %-10s %-12s %-10s\n" "$ID" "$MODE_SHOW" "$PORT" "$STATUS" "$PID" "$MEM_MB"
-  done
-
-  echo "==============================="
-  pause
-}
-
 restart_node() {
   clear
   read -p "请输入节点ID: " ID
@@ -871,123 +546,6 @@ log_node() {
   fi
 
   journalctl -u "$(service_name "$ID")" -n 50 --no-pager
-  pause
-}
-
-ssl_menu() {
-  clear
-  echo "==============================="
-  echo "SSL 证书管理"
-  echo "==============================="
-  echo "1. 申请/更换证书"
-  echo "2. 查看证书状态"
-  echo "3. 强制续期证书"
-  echo "4. 删除证书"
-  echo "0. 返回主菜单"
-  echo "==============================="
-  read -p "请输入选项: " c
-
-  case "$c" in
-    1) apply_ssl_cert; pause ;;
-    2) show_ssl_status ;;
-    3) renew_ssl_cert ;;
-    4) delete_ssl_cert ;;
-    0) menu ;;
-    *) echo "输入错误"; sleep 1; ssl_menu ;;
-  esac
-}
-
-show_ssl_status() {
-  clear
-  echo "==============================="
-  echo "SSL 证书状态"
-  echo "==============================="
-
-  if ! has_ssl_cert; then
-    echo "状态: 未安装"
-    echo "证书路径: $SSL_CERT"
-    echo "私钥路径: $SSL_KEY"
-    echo "说明: 未找到有效证书文件"
-    echo "==============================="
-    pause
-  fi
-
-  DOMAIN=$(get_ssl_domain)
-  [ -z "$DOMAIN" ] && DOMAIN="未记录"
-
-  END_DATE=$(openssl x509 -in "$SSL_CERT" -noout -enddate 2>/dev/null | cut -d= -f2-)
-  START_DATE=$(openssl x509 -in "$SSL_CERT" -noout -startdate 2>/dev/null | cut -d= -f2-)
-  SUBJECT=$(openssl x509 -in "$SSL_CERT" -noout -subject 2>/dev/null | sed 's/^subject=//')
-  ISSUER=$(openssl x509 -in "$SSL_CERT" -noout -issuer 2>/dev/null | sed 's/^issuer=//')
-
-  if [ -n "$END_DATE" ]; then
-    END_TS=$(date -d "$END_DATE" +%s 2>/dev/null)
-    NOW_TS=$(date +%s)
-    if [ -n "$END_TS" ]; then
-      LEFT_DAYS=$(( (END_TS - NOW_TS) / 86400 ))
-    else
-      LEFT_DAYS="未知"
-    fi
-  else
-    LEFT_DAYS="未知"
-  fi
-
-  echo "状态: 已安装"
-  echo "绑定域名: $DOMAIN"
-  echo "证书路径: $SSL_CERT"
-  echo "私钥路径: $SSL_KEY"
-  echo "证书目录: $SSL_DIR"
-  echo "签发对象: ${SUBJECT:-未知}"
-  echo "签发机构: ${ISSUER:-未知}"
-  echo "生效时间: ${START_DATE:-未知}"
-  echo "到期时间: ${END_DATE:-未知}"
-  echo "剩余天数: ${LEFT_DAYS} 天"
-
-  if [ -f "$SSL_INFO" ]; then
-    echo "信息文件: $SSL_INFO"
-  fi
-
-  echo "==============================="
-  pause
-}
-
-renew_ssl_cert() {
-  clear
-  DOMAIN=$(get_ssl_domain)
-
-  if [ -z "$DOMAIN" ]; then
-    echo "未找到证书域名，请先申请证书"
-    pause
-  fi
-
-  install_acme
-
-  echo "正在强制续期：$DOMAIN"
-  "$HOME/.acme.sh/acme.sh" --renew -d "$DOMAIN" --ecc --force
-
-  "$HOME/.acme.sh/acme.sh" --install-cert -d "$DOMAIN" --ecc \
-    --fullchain-file "$SSL_CERT" \
-    --key-file "$SSL_KEY" \
-    --reloadcmd "systemctl restart 'hysteria-*.service' 2>/dev/null || true"
-
-  echo "续期完成"
-  pause
-}
-
-delete_ssl_cert() {
-  clear
-  echo "此操作只删除本地 SSL 证书文件，不删除已有节点。"
-  echo "如果已有 SSL 节点正在使用该证书，删除后这些节点可能无法启动。"
-  read -p "确认删除 SSL 证书？输入 y: " confirm
-
-  if [ "$confirm" != "y" ]; then
-    ssl_menu
-  fi
-
-  rm -rf "$SSL_DIR"
-  mkdir -p "$SSL_DIR"
-
-  echo "SSL证书已删除"
   pause
 }
 
@@ -1058,8 +616,7 @@ update_panel() {
 menu() {
 clear
 echo "==============================="
-echo "      $PROJECT_NAME"
-echo "      Version $VERSION"
+echo "      HY2 多节点管理面板"
 echo "==============================="
 echo "1. 新增节点"
 echo "2. 查看所有节点"
@@ -1070,13 +627,12 @@ echo "6. 一键换端口"
 echo "7. 一键重置密码"
 echo "8. 一键生成二维码"
 echo "9. 查看所有链接"
-echo "10. 一键测速/检测"
-echo "11. 查看在线状态"
+echo "10. 重启指定节点"
+echo "11. 查看指定节点状态"
 echo "12. 查看指定节点日志"
-echo "13. SSL证书管理"
-echo "14. 删除管理面板（保留节点）"
-echo "15. 删除所有节点并卸载HY2"
-echo "16. 更新管理面板"
+echo "13. 删除管理面板（保留节点）"
+echo "14. 删除所有节点并卸载HY2"
+echo "15. 更新管理面板"
 echo "0. 退出"
 echo "==============================="
 read -p "请输入选项: " choice
@@ -1091,13 +647,12 @@ case "$choice" in
   7) reset_password ;;
   8) make_qr ;;
   9) show_all_links ;;
-  10) speed_test_node ;;
-  11) online_status ;;
+  10) restart_node ;;
+  11) status_node ;;
   12) log_node ;;
-  13) ssl_menu ;;
-  14) uninstall_manager ;;
-  15) uninstall_all ;;
-  16) update_panel ;;
+  13) uninstall_manager ;;
+  14) uninstall_all ;;
+  15) update_panel ;;
   0) exit 0 ;;
   *) echo "输入错误"; sleep 1; menu ;;
 esac
