@@ -153,44 +153,19 @@ node_server() {
 
 install_hysteria() {
   if command -v hysteria >/dev/null 2>&1; then
-    if file "$(command -v hysteria)" 2>/dev/null | grep -q "ELF"; then
-      echo "检测到 Hysteria2 已安装，跳过下载"
-      hysteria version || true
-      return
-    else
-      echo "检测到旧 hysteria 文件无效，删除后重新安装"
-      rm -f "$(command -v hysteria)"
-    fi
+    echo "检测到 Hysteria2 已安装，跳过下载"
+    hysteria version || true
+    return
   fi
 
   echo "正在安装 Hysteria2..."
 
-  ARCH=$(uname -m)
-  case "$ARCH" in
-    x86_64|amd64)
-      HY2_FILE="hysteria-linux-amd64"
-      ;;
-    aarch64|arm64)
-      HY2_FILE="hysteria-linux-arm64"
-      ;;
-    armv7l|armv7)
-      HY2_FILE="hysteria-linux-armv7"
-      ;;
-    *)
-      echo "不支持的架构: $ARCH"
-      exit 1
-      ;;
-  esac
-
-  # Hysteria 官方 tag 是 app/v2.x.x
-  # GitHub 下载链接里这个斜杠必须写成 app%2Fv2.x.x
-  HY2_TAG="app%2F${HY2_VERSION}"
-
   URLS=(
-    "https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
-    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
-    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
-    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/${HY2_TAG}/${HY2_FILE}"
+    "https://gh.llkk.cc/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://ghproxy.net/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://gh-proxy.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://hub.gitmirror.com/https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
+    "https://github.com/apernet/hysteria/releases/download/app/${HY2_VERSION}/${HY2_FILE}"
   )
 
   SUCCESS=0
@@ -199,34 +174,27 @@ install_hysteria() {
     echo "尝试下载: $url"
     rm -f /tmp/hysteria-download
 
-    curl -4 -L --fail \
-      --connect-timeout 10 \
-      --retry 2 \
-      --retry-delay 2 \
-      --max-time 90 \
-      -A "Mozilla/5.0" \
+    timeout 35 curl -L \
+      --connect-timeout 8 \
+      --retry 1 \
+      --speed-time 10 \
+      --speed-limit 10240 \
       "$url" \
       -o /tmp/hysteria-download
 
-    if [ -s /tmp/hysteria-download ] && file /tmp/hysteria-download | grep -q "ELF"; then
+    if [ -s /tmp/hysteria-download ]; then
       chmod +x /tmp/hysteria-download
-
-      if /tmp/hysteria-download version >/dev/null 2>&1 || /tmp/hysteria-download --version >/dev/null 2>&1; then
-        mv /tmp/hysteria-download /usr/local/bin/hysteria
-        chmod +x /usr/local/bin/hysteria
-        SUCCESS=1
-        break
-      fi
+      mv /tmp/hysteria-download /usr/local/bin/hysteria
+      chmod +x /usr/local/bin/hysteria
+      SUCCESS=1
+      break
     fi
 
-    echo "文件无效，切换源..."
-    echo "文件类型: $(file /tmp/hysteria-download 2>/dev/null || echo 无文件)"
-    echo "文件大小: $(ls -lh /tmp/hysteria-download 2>/dev/null | awk '{print $5}' || echo 0)"
+    echo "当前地址失败，尝试下一个..."
   done
 
   if [ "$SUCCESS" != "1" ]; then
     echo "Hysteria2 下载失败"
-    echo "请检查服务器是否能访问 GitHub Release，或手动上传 hysteria 到 /usr/local/bin/hysteria"
     exit 1
   fi
 
